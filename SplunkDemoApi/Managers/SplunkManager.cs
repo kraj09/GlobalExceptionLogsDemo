@@ -8,7 +8,7 @@ namespace SplunkDemoApi.Managers
 {
     public class SplunkManager
     {
-        public static async Task LogDataToSplunk(object data)
+        public static async Task LogDataToSplunk(string severity, string message, object data)
         {
             try
             {
@@ -16,7 +16,7 @@ namespace SplunkDemoApi.Managers
                 var esSender = new HttpEventCollectorSender(new Uri("http://localhost:8088"), "73f4c508-35da-4d14-9d4b-12a8d820935f",
                     null, HttpEventCollectorSender.SendMode.Sequential, 0, 0, 0, middleware.Plugin);
                 esSender.OnError += EsSender_OnError;
-                esSender.Send(Guid.NewGuid().ToString(), "INFO", "My Message", data);
+                esSender.Send(Guid.NewGuid().ToString(), severity, message, data);
 
                 var flushTask = esSender.FlushAsync();
                 flushTask.Start();

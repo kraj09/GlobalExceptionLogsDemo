@@ -18,61 +18,62 @@ namespace SplunkDemoApi.CustomExceptionMiddleware
     {
         private readonly RequestDelegate _next;
         private readonly ILoggerManager _logger;
-        private readonly RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
+        private LogMetadata log;
 
         public ExceptionMiddleware(RequestDelegate next, ILoggerManager logger)
         {
             _next = next;
             _logger = logger;
-            _recyclableMemoryStreamManager = new RecyclableMemoryStreamManager();
         }
 
         public async Task InvokeAsync(HttpContext httpContext)
         {
-            string requestLog = string.Empty;
-
+            string severity = "INFO";
+            string message = "My Demo Message";
+            log = new LogMetadata();
             var responseBodyStream = new MemoryStream();
             var bodyStream = httpContext.Response.Body;
 
             try
             {
-                requestLog = ReadRequestBody(httpContext);
-                //await SplunkManager.LogDataToSplunk(new { Request = requestLog });
-
-                
-
+                ReadRequestBody(httpContext);
                 
                 httpContext.Response.Body = responseBodyStream;
                 
                 await _next(httpContext);
-
-                
-
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Something went wrong (from Custom Middleware): {ex}");
-                //await SplunkManager.LogDataToSplunk(new { Exception = ex.Message });
+                severity = "Exception";
+                _logger.LogError($"Something went wrong (from Custom Middleware): {ex}");                
                 await HandleExceptionAsync(httpContext, ex);
             }
             finally
-            {
-                //ReadResponse(httpContext);
-                //string res = await ReadResponseBody(httpContext.Response);
+            {   
                 responseBodyStream.Seek(0, SeekOrigin.Begin);
-                var responseBody = new StreamReader(responseBodyStream).ReadToEnd();
-                // log here responseBody
+                log.ResponseBody = new StreamReader(responseBodyStream).ReadToEnd();
+                log.ResponseTimestamp = DateTime.Now;
+                log.ResponseContentType = httpContext.Response.ContentType;
+                log.ResponseStatusCode = (HttpStatusCode)httpContext.Response.StatusCode;
                 
                 responseBodyStream.Seek(0, SeekOrigin.Begin);
                 await responseBodyStream.CopyToAsync(bodyStream);
+
+                await SplunkManager.LogDataToSplunk(severity, message, log);
             }
         }
-
-        // working
-        private string ReadRequestBody(HttpContext context)
+        
+        private void ReadRequestBody(HttpContext context)
         {
             var injectedRequestStream = new MemoryStream();
-            var requestLog = $"REQUEST HttpMethod: {context.Request.Method}, Path: {context.Request.Path}";
+            log.Scheme = context.Request.Scheme;
+            log.Host = context.Request.Host.ToString();
+            log.QueryString = context.Request.QueryString.ToString();
+            log.RequestContentType = context.Request.ContentType;
+            log.RequestUri = context.Request.GetDisplayUrl();
+            log.RequestPath = context.Request.Path;
+            log.RequestMethod = context.Request.Method;
+            log.RequestTimestamp = DateTime.Now;
 
             if (context.Request.Method == "POST")
             {
@@ -81,7 +82,7 @@ namespace SplunkDemoApi.CustomExceptionMiddleware
                     var bodyAsText = bodyReader.ReadToEnd();
                     if (string.IsNullOrWhiteSpace(bodyAsText) == false)
                     {
-                        requestLog += $", Body : {bodyAsText}";
+                        log.RequestBody = bodyAsText;
                     }
 
                     var bytesToWrite = Encoding.UTF8.GetBytes(bodyAsText);
@@ -90,8 +91,6 @@ namespace SplunkDemoApi.CustomExceptionMiddleware
                     context.Request.Body = injectedRequestStream;
                 }
             }
-
-            return requestLog;
         }
 
         private Task HandleExceptionAsync(HttpContext context, Exception ex)
@@ -99,34 +98,14 @@ namespace SplunkDemoApi.CustomExceptionMiddleware
             context.Response.ContentType = "application/json";
             context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
 
+            log.ExceptionMessage = ex.Message;
+            log.ExceptionStackTrace = ex.StackTrace;
+
             return context.Response.WriteAsync(new ErrorDetails()
             {
                 StatusCode = context.Response.StatusCode,
                 Message = "Internal Server Error from the custom middleware"
             }.ToString());
-        }
-
-        private async Task LogResponse2(HttpContext context)
-        {
-            var originalBodyStream = context.Response.Body;
-
-            await using var responseBody = _recyclableMemoryStreamManager.GetStream();
-            context.Response.Body = responseBody;
-
-            await _next(context);
-
-            context.Response.Body.Seek(0, SeekOrigin.Begin);
-            var text = await new StreamReader(context.Response.Body).ReadToEndAsync();
-            context.Response.Body.Seek(0, SeekOrigin.Begin);
-
-            var x = $"Http Response Information:{Environment.NewLine}" +
-                                   $"Schema:{context.Request.Scheme} " +
-                                   $"Host: {context.Request.Host} " +
-                                   $"Path: {context.Request.Path} " +
-                                   $"QueryString: {context.Request.QueryString} " +
-                                   $"Response Body: {text}";
-
-            await responseBody.CopyToAsync(originalBodyStream);
         }
     }
 }
